@@ -150,7 +150,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (db.backend !== "local") {
       const t = setTimeout(() => {
         db.save(FLAT_ID, state).catch(() => {});
-      }, 800); // debounce so typing doesn't hammer the API
+      }, 300); // 300ms fast save so web actions reach Supabase immediately
       return () => clearTimeout(t);
     }
   }, [state]);
@@ -158,15 +158,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   /* hydrate from the remote database, then listen for other people's edits */
   useEffect(() => {
     let cancelled = false;
+    // Only adopt the remote copy if it actually has content. A freshly
+    // seeded row has state = '{}' — adopting that would wipe local data.
+    const usable = (s: AppState | null): s is AppState =>
+      !!s && Array.isArray(s.roommates) && Array.isArray(s.chores);
+
     if (db.backend !== "local") {
       db.load(FLAT_ID)
         .then((remote) => {
-          if (remote && !cancelled) setState(normalize(remote));
+          if (cancelled) return;
+          if (usable(remote)) setState(normalize(remote));
+          // remote is empty → push what we have up so the row is seeded
+          else setState((cur) => (db.save(FLAT_ID, cur), cur));
         })
         .catch(() => {});
     }
     const off = db.subscribe(FLAT_ID, (remote) => {
-      if (!cancelled) setState(normalize(remote));
+      if (!cancelled && usable(remote)) setState(normalize(remote));
     });
     return () => {
       cancelled = true;

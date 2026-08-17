@@ -115,18 +115,23 @@ export class SupabaseAdapter implements DataAdapter {
     Authorization: `Bearer ${SUPABASE_KEY}`,
     "Content-Type": "application/json",
   };
+  private lastSavedSig = "";
 
   async load(flatId: string): Promise<AppState | null> {
     const r = await fetch(
-      `${this.base}/flats?id=eq.${flatId}&select=state`,
+      `${this.base}/flats?id=eq.${flatId}&select=state,name`,
       { headers: this.headers },
     );
     if (!r.ok) throw new Error(`load failed: ${r.status}`);
-    const rows = (await r.json()) as { state: AppState }[];
-    return rows[0]?.state ?? null;
+    const rows = (await r.json()) as { state: AppState; name?: string }[];
+    if (!rows[0]?.state) return null;
+    const state = rows[0].state;
+    if (rows[0].name && !state.flatName) state.flatName = rows[0].name;
+    return state;
   }
 
   async save(flatId: string, state: AppState) {
+    this.lastSavedSig = JSON.stringify(state);
     // upsert the flat row; also sync the top-level `name` column
     await fetch(`${this.base}/flats`, {
       method: "POST",
@@ -227,8 +232,7 @@ export class SupabaseAdapter implements DataAdapter {
   }
 
   /**
-   * Poll every 5s for remote edits. Swap for the realtime websocket by
-   * installing @supabase/supabase-js and using .channel() — same callback.
+   * Poll every 3s for remote edits. Ignores state matching last local save.
    */
   subscribe(flatId: string, onChange: (s: AppState) => void) {
     let alive = true;
@@ -239,14 +243,18 @@ export class SupabaseAdapter implements DataAdapter {
         const s = await this.load(flatId);
         if (s) {
           const sig = JSON.stringify(s);
-          if (last && sig !== last) onChange(s);
-          last = sig;
+          if (sig !== this.lastSavedSig && sig !== last) {
+            last = sig;
+            onChange(s);
+          } else {
+            last = sig;
+          }
         }
       } catch {
         /* offline — try again next tick */
       }
     };
-    const id = setInterval(tick, 4000);
+    const id = setInterval(tick, 3000);
     return () => {
       alive = false;
       clearInterval(id);
