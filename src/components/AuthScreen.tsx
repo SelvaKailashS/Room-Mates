@@ -1,22 +1,19 @@
 import { useState } from "react";
-import {
-  ArrowRight,
-  Home,
-  KeyRound,
-  PlusCircle,
-  Sparkles,
-  Users,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, Home, KeyRound, PlusCircle, Sparkles, Users } from "lucide-react";
 import { BRAND } from "../lib/brand";
 import { Btn, Card, Field, inputCls } from "./ui";
 import { cn } from "../utils/cn";
 
 export default function AuthScreen({
   initialCode,
+  currentHomeName,
+  onCancel,
   onCreate,
   onJoin,
 }: {
   initialCode?: string | null;
+  currentHomeName?: string;
+  onCancel?: () => void;
   onCreate: (flatName: string, adminName: string, phone: string) => Promise<void>;
   onJoin: (joinCode: string, name: string, phone: string) => Promise<string | null>;
 }) {
@@ -71,6 +68,16 @@ export default function AuthScreen({
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg p-6 text-ink">
       <div className="cm-in w-full max-w-lg space-y-6">
+        {/* Back to Active Home button if user just navigated here */}
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex items-center gap-2 text-xs font-semibold text-accent hover:underline"
+          >
+            <ArrowLeft size={14} /> Back to {currentHomeName || "My Home"}
+          </button>
+        )}
         {/* brand hero */}
         <div className="text-center">
           <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-gradient-to-br from-emerald-500/20 to-sky-500/20 text-2xl font-extrabold shadow-lg">

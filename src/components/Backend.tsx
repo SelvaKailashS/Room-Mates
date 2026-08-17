@@ -10,12 +10,15 @@ import {
   FileText,
   HardDrive,
   Loader2,
+  LogOut,
   Radio,
   RefreshCw,
+  RotateCcw,
   Terminal,
   Timer,
   Zap,
 } from "lucide-react";
+import { useStore } from "../lib/store";
 import {
   FLAT_ID,
   SUPABASE_URL,
@@ -154,11 +157,76 @@ export default function Backend() {
         </div>
       </Card>
 
+      {/* Household Settings & Controls */}
+      <HouseholdSettings />
+
       <DocViewer md={workingModelMd} onDownload={downloadDoc} />
       <Architecture />
       <Walkthrough />
       <Files />
     </div>
+  );
+}
+
+function HouseholdSettings() {
+  const { state, leaveHome, reset } = useStore();
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  return (
+    <Card className="p-5 border-amber-500/30">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-bold text-ink">
+            <LogOut size={16} className="text-amber-400" />
+            Household Management & Data Controls
+          </h3>
+          <p className="mt-1 text-xs text-muted">
+            Switch between households or reset your local browser cache without affecting cloud data.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Btn
+            variant="soft"
+            onClick={() => leaveHome()}
+          >
+            <LogOut size={14} /> Switch / Leave Home
+          </Btn>
+
+          <Btn
+            variant="danger"
+            onClick={() => setConfirmReset(true)}
+          >
+            <RotateCcw size={14} /> Reset Local Browser Data
+          </Btn>
+        </div>
+      </div>
+
+      {confirmReset && (
+        <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-4 space-y-3">
+          <p className="text-xs font-semibold text-red-400">
+            ⚠️ Are you sure you want to clear your local browser data? This resets the local cache for &quot;{state.flatName}&quot;.
+          </p>
+          <div className="flex items-center gap-2">
+            <Btn
+              variant="danger"
+              onClick={() => {
+                reset();
+                setConfirmReset(false);
+              }}
+            >
+              Yes, Reset Local Cache
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => setConfirmReset(false)}
+            >
+              Cancel
+            </Btn>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

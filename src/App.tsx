@@ -7,7 +7,6 @@ import {
   Database,
   History,
   KeyRound,
-  LogOut,
   Moon,
   PartyPopper,
   Pencil,
@@ -64,7 +63,6 @@ function Shell() {
     pending,
     createNewHome,
     joinExistingHome,
-    leaveHome,
   } = useStore();
 
   const urlCode = new URLSearchParams(location.search).get("code");
@@ -154,6 +152,8 @@ function Shell() {
     return (
       <AuthScreen
         initialCode={urlCode}
+        currentHomeName={state.flatName}
+        onCancel={state.roommates.length > 0 ? () => setShowAuth(false) : undefined}
         onCreate={async (fName, aName, phone) => {
           await createNewHome(fName, aName, phone);
           setShowAuth(false);
@@ -268,19 +268,6 @@ function Shell() {
                 {copied ? "Copied!" : state.joinCode}
               </button>
             )}
-
-            {/* Switch Home Button */}
-            <button
-              onClick={() => {
-                leaveHome();
-                setShowAuth(true);
-              }}
-              title="Switch or Create another Home"
-              className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-2 text-xs font-semibold text-muted transition-colors hover:text-ink"
-            >
-              <LogOut size={13} />
-              Switch Home
-            </button>
 
             {/* start here / help */}
             <button
