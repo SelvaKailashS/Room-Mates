@@ -25,6 +25,10 @@ export interface DataAdapter {
   readonly backend: Backend;
   /** load the whole flat state */
   load(flatId: string): Promise<AppState | null>;
+  /** load a flat state by Join Code (e.g. FLAT-WE50-402) */
+  loadByCode(joinCode: string): Promise<{ id: string; state: AppState } | null>;
+  /** create a new flat in the database */
+  createFlat(flatId: string, flatName: string, joinCode: string, state: AppState): Promise<void>;
   /** persist the whole flat state (debounced by the caller) */
   save(flatId: string, state: AppState): Promise<void>;
   /** append one immutable activity row */
@@ -57,6 +61,18 @@ export class LocalAdapter implements DataAdapter {
     } catch {
       return null;
     }
+  }
+
+  async loadByCode(joinCode: string): Promise<{ id: string; state: AppState } | null> {
+    const state = await this.load();
+    if (state && state.joinCode?.toUpperCase() === joinCode.trim().toUpperCase()) {
+      return { id: "local", state };
+    }
+    return null;
+  }
+
+  async createFlat(_flatId: string, _flatName: string, _joinCode: string, state: AppState): Promise<void> {
+    await this.save("local", state);
   }
 
   async save(_flatId: string, state: AppState) {
@@ -119,15 +135,48 @@ export class SupabaseAdapter implements DataAdapter {
 
   async load(flatId: string): Promise<AppState | null> {
     const r = await fetch(
-      `${this.base}/flats?id=eq.${flatId}&select=state,name`,
+      `${this.base}/flats?id=eq.${flatId}&select=state,name,join_code`,
       { headers: this.headers },
     );
     if (!r.ok) throw new Error(`load failed: ${r.status}`);
-    const rows = (await r.json()) as { state: AppState; name?: string }[];
+    const rows = (await r.json()) as { state: AppState; name?: string; join_code?: string }[];
     if (!rows[0]?.state) return null;
     const state = rows[0].state;
-    if (rows[0].name && !state.flatName) state.flatName = rows[0].name;
+    if (rows[0].name) state.flatName = rows[0].name;
+    if (rows[0].join_code) state.joinCode = rows[0].join_code;
     return state;
+  }
+
+  async loadByCode(joinCode: string): Promise<{ id: string; state: AppState } | null> {
+    const clean = joinCode.trim().toUpperCase();
+    const r = await fetch(
+      `${this.base}/flats?join_code=eq.${clean}&select=id,state,name,join_code`,
+      { headers: this.headers },
+    );
+    if (!r.ok) return null;
+    const rows = (await r.json()) as { id: string; state: AppState; name?: string; join_code?: string }[];
+    if (!rows[0]?.state) return null;
+    const state = rows[0].state;
+    if (rows[0].name) state.flatName = rows[0].name;
+    if (rows[0].join_code) state.joinCode = rows[0].join_code;
+    return { id: rows[0].id, state };
+  }
+
+  async createFlat(flatId: string, flatName: string, joinCode: string, state: AppState): Promise<void> {
+    this.lastSavedSig = JSON.stringify(state);
+    const res = await fetch(`${this.base}/flats`, {
+      method: "POST",
+      headers: { ...this.headers, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({
+        id: flatId,
+        name: flatName,
+        join_code: joinCode,
+        state,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) throw new Error(`Failed to create flat: ${res.status}`);
+    await this.syncMembers(flatId, state);
   }
 
   async save(flatId: string, state: AppState) {

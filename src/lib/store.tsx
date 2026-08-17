@@ -38,10 +38,15 @@ const THEME_KEY = "roommates-theme";
 
 interface Ctx {
   state: AppState;
-  today: string;
+  flatId: string;
+  activeFlatId: string | null;
   loaded: boolean;
+  today: string;
   theme: "dark" | "light";
   toggleTheme: () => void;
+  createNewHome: (flatName: string, adminName: string, phone: string) => Promise<void>;
+  joinExistingHome: (joinCode: string, name: string, phone: string) => Promise<string | null>;
+  leaveHome: () => void;
   reset: () => void;
   log: (e: {
     choreId: string;
@@ -138,7 +143,12 @@ function load(): AppState {
   return normalize(seedState());
 }
 
+const ACTIVE_FLAT_KEY = "roommates-active-flat-id";
+
 export function StoreProvider({ children }: { children: ReactNode }) {
+  const [flatId, setFlatId] = useState<string>(
+    () => localStorage.getItem(ACTIVE_FLAT_KEY) ?? FLAT_ID,
+  );
   const [state, setState] = useState<AppState>(load);
   const [loaded, setLoaded] = useState(db.backend === "local");
   const [theme, setTheme] = useState<"dark" | "light">(
@@ -146,38 +156,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   const today = useMemo(() => toKey(new Date()), []);
 
+  useEffect(() => {
+    if (flatId) localStorage.setItem(ACTIVE_FLAT_KEY, flatId);
+  }, [flatId]);
+
   /* persist through the data adapter (localStorage or Postgres) */
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(state));
-    if (db.backend !== "local") {
+    if (db.backend !== "local" && flatId) {
       const t = setTimeout(() => {
-        db.save(FLAT_ID, state).catch(() => {});
+        db.save(flatId, state).catch(() => {});
       }, 200); // 200ms fast save so web actions reach Supabase immediately
       return () => clearTimeout(t);
     }
-  }, [state]);
+  }, [state, flatId]);
 
   /* hydrate from the remote database, then listen for other people's edits */
   useEffect(() => {
     let cancelled = false;
-    // Check if remote state has real data
     const hasData = (s: AppState | null): s is AppState =>
       !!s &&
       ((Array.isArray(s.roommates) && s.roommates.length > 0) ||
         (Array.isArray(s.chores) && s.chores.length > 0) ||
         (!!s.flatName && s.flatName !== BRAND.flat));
 
-    if (db.backend !== "local") {
-      db.load(FLAT_ID)
+    if (db.backend !== "local" && flatId) {
+      setLoaded(false);
+      db.load(flatId)
         .then((remote) => {
           if (cancelled) return;
           setLoaded(true);
           if (hasData(remote)) {
             setState(normalize(remote));
           } else {
-            // remote is empty -> push current local state to seed remote
             setState((cur) => {
-              db.save(FLAT_ID, cur).catch(() => {});
+              db.save(flatId, cur).catch(() => {});
               return cur;
             });
           }
@@ -185,18 +198,99 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .catch(() => {
           if (!cancelled) setLoaded(true);
         });
+
+      const off = db.subscribe(flatId, (remote) => {
+        if (!cancelled && hasData(remote)) {
+          setState(normalize(remote));
+        }
+      });
+
+      return () => {
+        cancelled = true;
+        off();
+      };
+    } else {
+      setLoaded(true);
     }
+  }, [flatId]);
 
-    const off = db.subscribe(FLAT_ID, (remote) => {
-      if (!cancelled && hasData(remote)) {
-        setState(normalize(remote));
+  const createNewHome = useCallback(
+    async (flatName: string, adminName: string, phone: string) => {
+      const newFlatId = `00000000-0000-0000-0000-${Date.now().toString().padStart(12, "0").slice(-12)}`;
+      const newJoinCode = makeJoinCode();
+      const adminId = `r${Date.now().toString(36)}`;
+      const adminRoommate: Roommate = {
+        id: adminId,
+        name: adminName,
+        phone,
+        color: pickColor(0),
+        status: "active",
+        role: "admin",
+        email: `${adminName.split(" ")[0].toLowerCase().replace(/\W/g, "")}@flat.local`,
+        channels: { ...DEFAULT_CHANNELS },
+        joined: true,
+      };
+
+      const newState: AppState = normalize({
+        ...seedState(),
+        flatName: flatName.trim(),
+        joinCode: newJoinCode,
+        roommates: [adminRoommate],
+        currentUserId: adminId,
+      });
+
+      await db.createFlat(newFlatId, flatName.trim(), newJoinCode, newState);
+      setFlatId(newFlatId);
+      setState(newState);
+    },
+    [],
+  );
+
+  const joinExistingHome = useCallback(
+    async (joinCode: string, name: string, phone: string) => {
+      const target = await db.loadByCode(joinCode);
+      if (!target) {
+        return `No home found for Join Code "${joinCode.toUpperCase()}". Check the code and try again.`;
       }
-    });
 
-    return () => {
-      cancelled = true;
-      off();
-    };
+      const existingState = target.state;
+      const roommateId = `r${Date.now().toString(36)}`;
+      const isFirst = (existingState.roommates || []).length === 0;
+
+      const newRoommate: Roommate = {
+        id: roommateId,
+        name,
+        phone,
+        color: pickColor((existingState.roommates || []).length),
+        status: "active",
+        role: isFirst ? "admin" : "member",
+        email: `${name.split(" ")[0].toLowerCase().replace(/\W/g, "")}@flat.local`,
+        channels: { ...DEFAULT_CHANNELS },
+        joined: true,
+      };
+
+      const newState: AppState = normalize({
+        ...existingState,
+        roommates: [...(existingState.roommates || []), newRoommate],
+        chores: (existingState.chores || []).map((c) => ({
+          ...c,
+          order: [...(c.order || []), roommateId],
+        })),
+        currentUserId: roommateId,
+      });
+
+      await db.save(target.id, newState);
+      setFlatId(target.id);
+      setState(newState);
+      return null;
+    },
+    [],
+  );
+
+  const leaveHome = useCallback(() => {
+    localStorage.removeItem(ACTIVE_FLAT_KEY);
+    setFlatId("");
+    setState(normalize(seedState()));
   }, []);
 
   useEffect(() => {
@@ -648,10 +742,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value: Ctx = {
     state,
+    flatId,
+    activeFlatId: flatId,
     today,
     loaded,
     theme,
     toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    createNewHome,
+    joinExistingHome,
+    leaveHome,
     reset,
     log,
     complete,

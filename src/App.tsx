@@ -6,6 +6,8 @@ import {
   CheckSquare,
   Database,
   History,
+  KeyRound,
+  LogOut,
   Moon,
   PartyPopper,
   Pencil,
@@ -29,7 +31,7 @@ import HolidayMode from "./components/HolidayMode";
 import AccessAlerts from "./components/AccessAlerts";
 import Guide from "./components/Guide";
 import Backend from "./components/Backend";
-import JoinFlow from "./components/JoinFlow";
+import AuthScreen from "./components/AuthScreen";
 import Profile from "./components/Profile";
 import { Avatar, Btn, Modal } from "./components/ui";
 import { cn } from "./utils/cn";
@@ -60,14 +62,14 @@ function Shell() {
     clearNotices,
     setFlatName,
     pending,
+    createNewHome,
+    joinExistingHome,
+    leaveHome,
   } = useStore();
 
-  /* invite links look like  ?code=FLAT-AB12-402  */
-  const [invite, setInvite] = useState<{ code: string | null } | null>(() => {
-    const code = new URLSearchParams(location.search).get("code");
-    const fresh = !localStorage.getItem("roommates-joined");
-    return code || fresh ? { code } : null;
-  });
+  const urlCode = new URLSearchParams(location.search).get("code");
+  const [showAuth, setShowAuth] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(state.flatName ?? "");
   const [tab, setTab] = useState<TabId>(() =>
@@ -80,6 +82,13 @@ function Shell() {
   const closeWelcome = () => {
     localStorage.setItem("roommates-welcomed", "1");
     setWelcome(false);
+  };
+
+  const copyInvite = () => {
+    const url = `${location.origin}${location.pathname}?code=${state.joinCode ?? ""}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   /* lets any empty-state button jump to another tab */
@@ -141,17 +150,22 @@ function Shell() {
     if (t?.admin && !isAdmin) setTab("today");
   }, [isAdmin, tab]);
 
-  if (invite) {
+  if (!state.roommates.length || showAuth || !!urlCode) {
     return (
-      <JoinFlow
-        code={invite.code}
-        onDone={() => {
-          localStorage.setItem("roommates-joined", "1");
-          localStorage.setItem("roommates-welcomed", "1");
-          setWelcome(false);
-          setInvite(null);
-          history.replaceState(null, "", location.pathname);
-          setTab(state.chores.length === 0 ? "chores" : "today");
+      <AuthScreen
+        initialCode={urlCode}
+        onCreate={async (fName, aName, phone) => {
+          await createNewHome(fName, aName, phone);
+          setShowAuth(false);
+          if (urlCode) history.replaceState(null, "", location.pathname);
+        }}
+        onJoin={async (code, name, phone) => {
+          const err = await joinExistingHome(code, name, phone);
+          if (!err) {
+            setShowAuth(false);
+            if (urlCode) history.replaceState(null, "", location.pathname);
+          }
+          return err;
         }}
       />
     );
@@ -241,14 +255,32 @@ function Shell() {
                   {isAdmin ? "Admin" : "Member"}
                 </span>
               </div>
-            ) : (
+            ) : null}
+
+            {/* Share Join Code Button */}
+            {state.joinCode && (
               <button
-                onClick={() => setTab("mates")}
-                className="rounded-lg border border-dashed border-line bg-panel px-3 py-2 text-[11px] font-semibold text-muted hover:text-ink"
+                onClick={copyInvite}
+                title="Click to copy shareable invite link for your roommates"
+                className="flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-2 font-mono text-xs font-bold text-accent transition-colors hover:bg-accent/20"
               >
-                + Add the first roommate
+                <KeyRound size={13} />
+                {copied ? "Copied!" : state.joinCode}
               </button>
             )}
+
+            {/* Switch Home Button */}
+            <button
+              onClick={() => {
+                leaveHome();
+                setShowAuth(true);
+              }}
+              title="Switch or Create another Home"
+              className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-2 text-xs font-semibold text-muted transition-colors hover:text-ink"
+            >
+              <LogOut size={13} />
+              Switch Home
+            </button>
 
             {/* start here / help */}
             <button
