@@ -22,17 +22,17 @@ create table if not exists flats (
 -- 2. WHO LIVES THERE
 -- ------------------------------------------------------------
 create table if not exists flat_members (
-  flat_id     uuid references flats(id) on delete cascade,
-  user_id     uuid references auth.users(id) on delete cascade,
+  flat_id      uuid references flats(id) on delete cascade,
+  user_id      text not null,
   display_name text,
-  role        text not null default 'member'  check (role in ('admin','member')),
-  status      text not null default 'active'  check (status in ('active','sick','away')),
-  phone       text,
-  email       text,
-  push_token  jsonb,
-  channels    jsonb not null default '{"push":true,"whatsapp":true,"email":false}',
-  joined_at   timestamptz not null default now(),
-  primary key (flat_id, user_id)
+  role         text not null default 'member' check (role in ('admin','member')),
+  status       text not null default 'active' check (status in ('active','sick','away')),
+  phone        text,
+  email        text,
+  push_token   jsonb,
+  channels     jsonb not null default '{"push":true,"whatsapp":true,"email":false}',
+  joined_at    timestamptz not null default now(),
+  primary key  (flat_id, user_id)
 );
 
 -- ------------------------------------------------------------
@@ -87,20 +87,18 @@ create policy "anon read flat"   on flats for select using (true);
 create policy "anon insert flat" on flats for insert with check (true);
 create policy "anon update flat" on flats for update using (true);
 
--- ── flat_members: auth users only ───────────────────────────
-drop policy if exists "see housemates"      on flat_members;
+-- ── flat_members: anon can read and write ──────────────────
+drop policy if exists "see housemates"        on flat_members;
 drop policy if exists "admins manage members" on flat_members;
+drop policy if exists "anon read members"     on flat_members;
+drop policy if exists "anon insert members"   on flat_members;
+drop policy if exists "anon update members"   on flat_members;
+drop policy if exists "anon delete members"   on flat_members;
 
-create policy "see housemates" on flat_members
-  for select using (flat_id in (select my_flats()));
-
-create policy "admins manage members" on flat_members
-  for all using (
-    exists (select 1 from flat_members m
-            where m.flat_id = flat_members.flat_id
-              and m.user_id = auth.uid()
-              and m.role    = 'admin')
-  );
+create policy "anon read members"   on flat_members for select using (true);
+create policy "anon insert members" on flat_members for insert with check (true);
+create policy "anon update members" on flat_members for update using (true);
+create policy "anon delete members" on flat_members for delete using (true);
 
 -- ── duty_log: anon can read and insert ──────────────────────
 drop policy if exists "read flat log"   on duty_log;
@@ -160,8 +158,13 @@ create trigger flats_touch before update on flats
 -- ============================================================
 --  LIVE SYNC
 -- ============================================================
-alter publication supabase_realtime add table flats;
-alter publication supabase_realtime add table duty_log;
+do $$ begin
+  alter publication supabase_realtime add table flats;
+exception when others then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table duty_log;
+exception when others then null; end $$;
 
 -- ============================================================
 --  SEED your first home

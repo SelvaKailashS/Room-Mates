@@ -220,7 +220,7 @@ export class SupabaseAdapter implements DataAdapter {
       try {
         const s = await this.load(flatId);
         if (s) {
-          const sig = JSON.stringify(s).length + ":" + (s.notices?.length ?? 0);
+          const sig = JSON.stringify(s);
           if (last && sig !== last) onChange(s);
           last = sig;
         }
@@ -228,7 +228,7 @@ export class SupabaseAdapter implements DataAdapter {
         /* offline — try again next tick */
       }
     };
-    const id = setInterval(tick, 5000);
+    const id = setInterval(tick, 4000);
     return () => {
       alive = false;
       clearInterval(id);

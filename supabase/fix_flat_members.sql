@@ -3,12 +3,12 @@
 --  Run this in Supabase → SQL Editor → Run
 -- ============================================================
 
--- Drop the old table (it's empty anyway) and recreate without auth FK
+-- Drop the old table and recreate with user_id as TEXT (matching app-generated IDs like 'rmswq4daf')
 drop table if exists flat_members cascade;
 
 create table flat_members (
   flat_id      uuid references flats(id) on delete cascade,
-  user_id      uuid not null,              -- app-generated ID, no auth required
+  user_id      text not null,              -- TEXT because frontend IDs are 'r...' strings, not UUIDs
   display_name text,
   role         text not null default 'member' check (role in ('admin','member')),
   status       text not null default 'active' check (status in ('active','sick','away')),
@@ -20,7 +20,7 @@ create table flat_members (
   primary key  (flat_id, user_id)
 );
 
--- RLS: anon can read and write (same pattern as flats table)
+-- RLS: anon can read and write
 alter table flat_members enable row level security;
 
 drop policy if exists "anon read members"   on flat_members;
