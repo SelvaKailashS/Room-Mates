@@ -39,6 +39,7 @@ const THEME_KEY = "roommates-theme";
 interface Ctx {
   state: AppState;
   today: string;
+  loaded: boolean;
   theme: "dark" | "light";
   toggleTheme: () => void;
   reset: () => void;
@@ -96,7 +97,7 @@ const StoreCtx = createContext<Ctx | null>(null);
 
 /** fill in every field added after the first release */
 function normalize(s: AppState): AppState {
-  const roommates = s.roommates.map((r, i) => ({
+  const roommates = (s.roommates || []).map((r, i) => ({
     ...r,
     role: r.role ?? (i === 0 ? "admin" : "member"),
     email:
@@ -107,7 +108,7 @@ function normalize(s: AppState): AppState {
   return {
     ...s,
     roommates,
-    chores: s.chores.map((c) =>
+    chores: (s.chores || []).map((c) =>
       c.cooking === undefined && /cook/i.test(c.name) ? { ...c, cooking: true } : c,
     ),
     holidays: s.holidays ?? [],
@@ -139,6 +140,7 @@ function load(): AppState {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(load);
+  const [loaded, setLoaded] = useState(db.backend === "local");
   const [theme, setTheme] = useState<"dark" | "light">(
     () => (localStorage.getItem(THEME_KEY) as "dark" | "light") || "dark",
   );
@@ -150,7 +152,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (db.backend !== "local") {
       const t = setTimeout(() => {
         db.save(FLAT_ID, state).catch(() => {});
-      }, 300); // 300ms fast save so web actions reach Supabase immediately
+      }, 200); // 200ms fast save so web actions reach Supabase immediately
       return () => clearTimeout(t);
     }
   }, [state]);
@@ -158,24 +160,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   /* hydrate from the remote database, then listen for other people's edits */
   useEffect(() => {
     let cancelled = false;
-    // Only adopt the remote copy if it actually has content. A freshly
-    // seeded row has state = '{}' — adopting that would wipe local data.
-    const usable = (s: AppState | null): s is AppState =>
-      !!s && Array.isArray(s.roommates) && Array.isArray(s.chores);
+    // Check if remote state has real data
+    const hasData = (s: AppState | null): s is AppState =>
+      !!s &&
+      ((Array.isArray(s.roommates) && s.roommates.length > 0) ||
+        (Array.isArray(s.chores) && s.chores.length > 0) ||
+        (!!s.flatName && s.flatName !== BRAND.flat));
 
     if (db.backend !== "local") {
       db.load(FLAT_ID)
         .then((remote) => {
           if (cancelled) return;
-          if (usable(remote)) setState(normalize(remote));
-          // remote is empty → push what we have up so the row is seeded
-          else setState((cur) => (db.save(FLAT_ID, cur), cur));
+          setLoaded(true);
+          if (hasData(remote)) {
+            setState(normalize(remote));
+          } else {
+            // remote is empty -> push current local state to seed remote
+            setState((cur) => {
+              db.save(FLAT_ID, cur).catch(() => {});
+              return cur;
+            });
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          if (!cancelled) setLoaded(true);
+        });
     }
+
     const off = db.subscribe(FLAT_ID, (remote) => {
-      if (!cancelled && usable(remote)) setState(normalize(remote));
+      if (!cancelled && hasData(remote)) {
+        setState(normalize(remote));
+      }
     });
+
     return () => {
       cancelled = true;
       off();
@@ -632,6 +649,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Ctx = {
     state,
     today,
+    loaded,
     theme,
     toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
     reset,

@@ -26,10 +26,21 @@ export default function JoinFlow({
   code: string | null;
   onDone: () => void;
 }) {
-  const { state, joinFlat } = useStore();
+  const { state, joinFlat, loaded } = useStore();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [welcomed, setWelcomed] = useState<string | null>(null);
+
+  if (!loaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg p-6">
+        <div className="text-center space-y-3">
+          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          <p className="text-xs font-semibold text-muted">Connecting to home...</p>
+        </div>
+      </div>
+    );
+  }
 
   const flat = state.flatName ?? BRAND.flat;
   const codeOk = !code || code.toUpperCase() === (state.joinCode ?? "").toUpperCase();
