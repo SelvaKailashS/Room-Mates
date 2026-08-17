@@ -127,12 +127,13 @@ export class SupabaseAdapter implements DataAdapter {
   }
 
   async save(flatId: string, state: AppState) {
-    // upsert the flat row; `resolution=merge-duplicates` = insert or update
+    // upsert the flat row; also sync the top-level `name` column
     await fetch(`${this.base}/flats`, {
       method: "POST",
       headers: { ...this.headers, Prefer: "resolution=merge-duplicates" },
       body: JSON.stringify({
         id: flatId,
+        name: state.flatName ?? "My Home",
         join_code: state.joinCode,
         state,
         updated_at: new Date().toISOString(),
