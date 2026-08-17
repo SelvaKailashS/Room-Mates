@@ -31,7 +31,7 @@ const slotStyle: Record<string, string> = {
 };
 
 export default function TodayRoster() {
-  const { state, today, complete, uncomplete, swap, setStatus, toggleHoliday } =
+  const { state, today, complete, uncomplete, swap, setStatus, toggleHoliday, me, isAdmin } =
     useStore();
   const [date, setDate] = useState(today);
   const [swapFor, setSwapFor] = useState<Session | null>(null);
@@ -299,7 +299,9 @@ export default function TodayRoster() {
                 <Btn
                   variant="danger"
                   onClick={() => rm && setStatus(rm.id, "sick")}
-                  disabled={!rm || rm.status === "sick"}
+                  disabled={!rm || rm.status === "sick" || (!isAdmin && rm.id !== me?.id)}
+                  title={!isAdmin && rm?.id !== me?.id ? "Only this roommate or Admin can update status" : undefined}
+                  className={cn(!isAdmin && rm?.id !== me?.id && "opacity-40 cursor-not-allowed")}
                 >
                   Sick?
                 </Btn>

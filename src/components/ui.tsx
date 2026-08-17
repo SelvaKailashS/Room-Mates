@@ -79,6 +79,7 @@ export function Btn({
   className,
   type = "button",
   disabled,
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -86,6 +87,7 @@ export function Btn({
   className?: string;
   type?: "button" | "submit";
   disabled?: boolean;
+  title?: string;
 }) {
   const styles = {
     ghost:
@@ -99,6 +101,7 @@ export function Btn({
     <button
       type={type}
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-40",
