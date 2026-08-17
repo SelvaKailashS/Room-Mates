@@ -145,11 +145,29 @@ export class SupabaseAdapter implements DataAdapter {
   }
 
   /**
-   * Upsert all roommates from the app state into the flat_members table.
-   * Uses the app-generated roommate ID as user_id (no Supabase Auth needed).
+   * Sync roommates from state into flat_members table.
+   * Upserts active roommates and deletes any roommates that were removed.
    */
   private async syncMembers(flatId: string, state: AppState) {
-    if (!state.roommates?.length) return;
+    const currentIds = (state.roommates || []).map((r) => r.id);
+
+    if (currentIds.length === 0) {
+      // All roommates deleted/cleared -> delete all members for this flat
+      await fetch(`${this.base}/flat_members?flat_id=eq.${flatId}`, {
+        method: "DELETE",
+        headers: this.headers,
+      });
+      return;
+    }
+
+    // Delete any members from flat_members that are no longer in the roommate list
+    const deleteUrl = `${this.base}/flat_members?flat_id=eq.${flatId}&user_id=not.in.(${currentIds.join(",")})`;
+    await fetch(deleteUrl, {
+      method: "DELETE",
+      headers: this.headers,
+    });
+
+    // Upsert current roommates
     const rows = state.roommates.map((r) => ({
       flat_id: flatId,
       user_id: r.id,
