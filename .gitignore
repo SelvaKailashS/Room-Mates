@@ -1,0 +1,42 @@
+# ============================================================
+#  Room Mates · files that must NEVER reach GitHub
+# ============================================================
+
+# --- SECRETS -------------------------------------------------
+# .env holds your Supabase keys. .env.example is the safe
+# template and IS committed — the real .env never is.
+.env
+.env.*
+!.env.example
+*.pem
+*vapid*.json
+
+# --- dependencies & build output -----------------------------
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+*.local
+
+# --- Supabase CLI --------------------------------------------
+supabase/.temp/
+supabase/.branches/
+.branches/
+
+# --- logs ----------------------------------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# --- editors & OS --------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.sw?

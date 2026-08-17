@@ -1,0 +1,254 @@
+{
+  "name": "Room Mates — Duty Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 5 }]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://jhlkebjfhatnvttsuwtr.supabase.co/rest/v1/flats",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "id", "value": "eq.00000000-0000-0000-0000-000000000402" },
+            { "name": "select", "value": "state,join_code" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$vars.SUPABASE_ANON_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$vars.SUPABASE_ANON_KEY}}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-flat-state",
+      "name": "Fetch Flat State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── planAlerts (ported from notify.ts) ──────────────────\n// Pull the flat state from the API response\nconst rows = $input.all();\nif (!rows.length || !rows[0].json.length) {\n  return [];\n}\n\nconst flat = rows[0].json[0];\nconst state = flat.state;\n\nif (!state || !state.roommates || !state.chores) {\n  return [];\n}\n\nconst rules = state.rules || {\n  remindBefore: 30,\n  escalateAfter: 60,\n  dailyDigest: true,\n  digestTime: '07:00',\n  holidayBlast: true,\n  reassignAlert: true,\n};\n\n// Current time helpers\nconst now = new Date();\nconst todayKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;\nconst nowMin = now.getHours() * 60 + now.getMinutes();\n\nfunction parseTime(t) {\n  // \"07:30 AM\" or \"08:00 PM\" or \"14:30\"\n  const m = t.match(/(\\d+):(\\d+)\\s*(AM|PM)?/i);\n  if (!m) return 0;\n  let h = parseInt(m[1]);\n  const min = parseInt(m[2]);\n  const period = (m[3] || '').toUpperCase();\n  if (period === 'PM' && h !== 12) h += 12;\n  if (period === 'AM' && h === 12) h = 0;\n  return h * 60 + min;\n}\n\nfunction isHoliday(date) {\n  if (state.holidays?.includes(date)) return true;\n  const d = new Date(date + 'T00:00:00');\n  return !!state.autoSundayHoliday && d.getDay() === 0;\n}\n\nfunction roommateById(id) {\n  return state.roommates.find(r => r.id === id);\n}\n\nfunction periodIndex(chore, date, anchor) {\n  const diff = Math.floor((new Date(date+'T00:00:00').getTime() - new Date(anchor+'T00:00:00').getTime()) / 86400000);\n  if (chore.frequency === 'weekly') return Math.floor(diff / 7);\n  return diff;\n}\n\nfunction mod(a, n) { return ((a % n) + n) % n; }\n\nfunction getAssignedId(chore, date, offset = 0) {\n  const key = `${chore.id}${offset ? '#m' + offset : ''}|${date}`;\n  if (state.overrides?.[key]) return state.overrides[key];\n  if (state.completed?.[key]) return null; // already done\n\n  const roster = chore.order.filter(id => state.roommates.some(r => r.id === id));\n  const extra = state.roommates.map(r => r.id).filter(id => !roster.includes(id));\n  const seq = [...roster, ...extra];\n  if (!seq.length) return null;\n\n  const idx = mod(periodIndex(chore, date, state.anchor) + offset, seq.length);\n  const originalId = seq[idx];\n  const statusOf = id => state.roommates.find(r => r.id === id)?.status ?? 'active';\n\n  let picked = originalId;\n  if (statusOf(originalId) !== 'active') {\n    for (let i = 1; i <= seq.length; i++) {\n      const cand = seq[mod(idx + i, seq.length)];\n      if (statusOf(cand) === 'active') { picked = cand; break; }\n    }\n  }\n  return picked;\n}\n\nconst alerts = [];\n\nfor (const chore of state.chores) {\n  const sessions = [];\n  if (chore.cooking && isHoliday(todayKey)) {\n    const meals = state.holidayMeals?.length ? state.holidayMeals : [\n      { name: 'Holiday Breakfast', time: '08:30 AM', slot: 'Morning' },\n      { name: 'Holiday Lunch',     time: '01:00 PM', slot: 'Afternoon' },\n      { name: 'Holiday Dinner',    time: '08:30 PM', slot: 'Night' },\n    ];\n    meals.forEach((m, i) => sessions.push({ ...m, key: `${chore.id}#m${i}`, offset: i }));\n  } else {\n    sessions.push({ name: chore.name, time: chore.time, key: chore.id, offset: 0 });\n  }\n\n  for (const session of sessions) {\n    const dutyMin = parseTime(session.time);\n    const assignedId = getAssignedId(chore, todayKey, session.offset);\n    if (!assignedId) continue;\n\n    const rm = roommateById(assignedId);\n    if (!rm) continue;\n\n    // reminder window: [dutyTime - remindBefore - 2, dutyTime - remindBefore + 2]\n    const remWindow = dutyMin - rules.remindBefore;\n    const isInRemWindow = nowMin >= remWindow - 2 && nowMin <= remWindow + 2;\n    if (isInRemWindow) {\n      alerts.push({\n        json: {\n          alertKey: `rem|${session.key}|${todayKey}|${remWindow}`,\n          kind: 'reminder',\n          title: `⏰ Your turn: ${session.name}`,\n          body: `Hey ${rm.name}! ${session.name} is due at ${session.time} today.`,\n          roommateId: assignedId,\n          phone: rm.phone,\n          email: rm.email,\n          channels: rm.channels || { push: true, whatsapp: false, email: false },\n        }\n      });\n    }\n\n    // overdue nudge\n    const overdueWindow = dutyMin + rules.escalateAfter;\n    const isOverdue = nowMin >= overdueWindow - 2 && nowMin <= overdueWindow + 2;\n    if (isOverdue) {\n      alerts.push({\n        json: {\n          alertKey: `ov|${session.key}|${todayKey}|${overdueWindow}`,\n          kind: 'overdue',\n          title: `⚠️ Still pending: ${session.name}`,\n          body: `${rm.name}, ${session.name} was due at ${session.time} and hasn't been marked complete yet.`,\n          roommateId: assignedId,\n          phone: rm.phone,\n          email: rm.email,\n          channels: rm.channels || { push: true, whatsapp: false, email: false },\n        }\n      });\n    }\n  }\n}\n\nreturn alerts;"
+      },
+      "id": "plan-alerts",
+      "name": "Plan Alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.alertKey }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ]
+        }
+      },
+      "id": "has-alerts",
+      "name": "Has Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://jhlkebjfhatnvttsuwtr.supabase.co/rest/v1/sent_alerts",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "flat_id", "value": "eq.00000000-0000-0000-0000-000000000402" },
+            { "name": "alert_key", "value": "=eq.{{ $json.alertKey }}" },
+            { "name": "select", "value": "alert_key" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$vars.SUPABASE_ANON_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$vars.SUPABASE_ANON_KEY}}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-dedup",
+      "name": "Check Dedup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only pass through alerts that haven't been sent yet\nconst dedupResult = $input.all();\nconst alert = $('Has Alerts?').item.json;\n\n// If sent_alerts returned 0 rows → not sent yet → pass through\nif (dedupResult[0].json.length === 0) {\n  return [{ json: alert }];\n}\nreturn [];"
+      },
+      "id": "filter-unsent",
+      "name": "Filter Unsent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channels?.whatsapp }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "whatsapp-enabled",
+      "name": "WhatsApp Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.channels?.email }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "email-enabled",
+      "name": "Email Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 340]
+    },
+    {
+      "parameters": {
+        "url": "https://api.twilio.com/2010-04-01/Accounts/{{$vars.TWILIO_ACCOUNT_SID}}/Messages.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "To", "value": "=whatsapp:{{ $json.phone }}" },
+            { "name": "From", "value": "=whatsapp:{{$vars.TWILIO_WHATSAPP_FROM}}" },
+            { "name": "Body", "value": "={{ $json.title }}\n\n{{ $json.body }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-whatsapp",
+      "name": "Send WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1780, 80],
+      "credentials": { "httpBasicAuth": { "name": "Twilio Basic Auth" } },
+      "notes": "Set credentials: username=TWILIO_ACCOUNT_SID, password=TWILIO_AUTH_TOKEN"
+    },
+    {
+      "parameters": {
+        "fromEmail": "roommates@yourapp.com",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.title }}",
+        "text": "={{ $json.body }}\n\n---\nRoom Mates · Automatic Duty Reminder"
+      },
+      "id": "send-email",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1780, 300],
+      "notes": "Configure SMTP credentials in n8n → Credentials → SMTP"
+    },
+    {
+      "parameters": {
+        "url": "https://jhlkebjfhatnvttsuwtr.supabase.co/rest/v1/sent_alerts",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$vars.SUPABASE_ANON_KEY}}" },
+            { "name": "Authorization", "value": "=Bearer {{$vars.SUPABASE_ANON_KEY}}" },
+            { "name": "Prefer", "value": "resolution=ignore-duplicates" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"flat_id\": \"00000000-0000-0000-0000-000000000402\",\n  \"alert_key\": \"{{ $json.alertKey }}\"\n}",
+        "options": {}
+      },
+      "id": "mark-sent",
+      "name": "Mark Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 500]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [[{ "node": "Fetch Flat State", "type": "main", "index": 0 }]]
+    },
+    "Fetch Flat State": {
+      "main": [[{ "node": "Plan Alerts", "type": "main", "index": 0 }]]
+    },
+    "Plan Alerts": {
+      "main": [[{ "node": "Has Alerts?", "type": "main", "index": 0 }]]
+    },
+    "Has Alerts?": {
+      "main": [
+        [{ "node": "Check Dedup", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Check Dedup": {
+      "main": [[{ "node": "Filter Unsent", "type": "main", "index": 0 }]]
+    },
+    "Filter Unsent": {
+      "main": [
+        [
+          { "node": "WhatsApp Enabled?", "type": "main", "index": 0 },
+          { "node": "Email Enabled?", "type": "main", "index": 0 },
+          { "node": "Mark Sent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "WhatsApp Enabled?": {
+      "main": [
+        [{ "node": "Send WhatsApp", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Email Enabled?": {
+      "main": [
+        [{ "node": "Send Email", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": { "templateId": "room-mates-reminders-v1" },
+  "pinData": {}
+}
