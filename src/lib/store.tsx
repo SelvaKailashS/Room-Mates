@@ -130,20 +130,33 @@ function normalize(s: AppState): AppState {
   };
 }
 
+const ACTIVE_FLAT_KEY = "roommates-active-flat-id";
+const CURRENT_USER_KEY = "roommates-device-user-id";
+
+/** Preserve the device's local signed-in user ID so remote state sync doesn't overwrite it */
+function withDeviceUser(remote: AppState): AppState {
+  const norm = normalize(remote);
+  const localUser = localStorage.getItem(CURRENT_USER_KEY);
+  const stillExists = norm.roommates.some((r) => r.id === localUser);
+  const activeUser = stillExists ? localUser! : (norm.roommates[0]?.id ?? "");
+  if (activeUser && activeUser !== localUser) {
+    localStorage.setItem(CURRENT_USER_KEY, activeUser);
+  }
+  return { ...norm, currentUserId: activeUser };
+}
+
 function load(): AppState {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as AppState;
-      if (parsed.roommates && parsed.chores) return normalize(parsed);
+      if (parsed.roommates && parsed.chores) return withDeviceUser(parsed);
     }
   } catch {
     /* ignore */
   }
-  return normalize(seedState());
+  return withDeviceUser(seedState());
 }
-
-const ACTIVE_FLAT_KEY = "roommates-active-flat-id";
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [flatId, setFlatId] = useState<string>(
@@ -187,7 +200,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (cancelled) return;
           setLoaded(true);
           if (hasData(remote)) {
-            setState(normalize(remote));
+            setState(withDeviceUser(remote));
           } else {
             setState((cur) => {
               db.save(flatId, cur).catch(() => {});
@@ -201,7 +214,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const off = db.subscribe(flatId, (remote) => {
         if (!cancelled && hasData(remote)) {
-          setState(normalize(remote));
+          setState(withDeviceUser(remote));
         }
       });
 
@@ -239,6 +252,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         currentUserId: adminId,
       });
 
+      localStorage.setItem(CURRENT_USER_KEY, adminId);
       await db.createFlat(newFlatId, flatName.trim(), newJoinCode, newState);
       setFlatId(newFlatId);
       setState(newState);
@@ -279,6 +293,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         currentUserId: roommateId,
       });
 
+      localStorage.setItem(CURRENT_USER_KEY, roommateId);
       await db.save(target.id, newState);
       setFlatId(target.id);
       setState(newState);
@@ -684,6 +699,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signInAs: Ctx["signInAs"] = useCallback((id) => {
+    localStorage.setItem(CURRENT_USER_KEY, id);
     setState((s) => ({ ...s, currentUserId: id }));
   }, []);
 
