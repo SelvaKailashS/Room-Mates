@@ -138,6 +138,33 @@ export class SupabaseAdapter implements DataAdapter {
         updated_at: new Date().toISOString(),
       }),
     });
+
+    // mirror every roommate into flat_members so the table stays in sync
+    await this.syncMembers(flatId, state);
+  }
+
+  /**
+   * Upsert all roommates from the app state into the flat_members table.
+   * Uses the app-generated roommate ID as user_id (no Supabase Auth needed).
+   */
+  private async syncMembers(flatId: string, state: AppState) {
+    if (!state.roommates?.length) return;
+    const rows = state.roommates.map((r) => ({
+      flat_id: flatId,
+      user_id: r.id,
+      display_name: r.name,
+      role: r.role ?? "member",
+      status: r.status ?? "active",
+      phone: r.phone ?? null,
+      email: r.email ?? null,
+      channels: r.channels ?? { push: true, whatsapp: true, email: false },
+      joined_at: (r as unknown as Record<string, unknown>).joinedAt ?? new Date().toISOString(),
+    }));
+    await fetch(`${this.base}/flat_members`, {
+      method: "POST",
+      headers: { ...this.headers, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify(rows),
+    });
   }
 
   async appendLog(flatId: string, row: Record<string, unknown>) {
